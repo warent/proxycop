@@ -5,9 +5,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/warent/proxycop/utility"
 )
 
 func main() {
+
+	utility.InitializeDB()
+	defer utility.CloseDB()
+
 	go startProxy()
 
 	sig := make(chan os.Signal)
