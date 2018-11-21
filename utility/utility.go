@@ -13,6 +13,8 @@ import (
 
 var db *buntdb.DB
 
+var ErrNoStatus error = errors.New("No Status")
+
 type ProxyCopURLStatus struct {
 	Blacklisted bool
 
@@ -104,5 +106,5 @@ func FetchURLStatus(url *url.URL) (*ProxyCopURLStatus, error) {
 		}
 	}
 
-	return nil, errors.New("No Status")
+	return nil, ErrNoStatus
 }

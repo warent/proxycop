@@ -1,12 +1,12 @@
 <template>
   <div class="hello">
-    <h1>Hello again</h1>
+    Welcome to the ProxyCop dashboard.
   </div>
 </template>
 
 <script>
 export default {
-  name: 'HelloAgain',
+  name: 'HelloWorld',
   data () {
     return {
       msg: 'Welcome to Your Vue.js App'

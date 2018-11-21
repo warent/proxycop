@@ -10,6 +10,7 @@ import (
 
 	"github.com/elazarl/goproxy"
 	"github.com/gorilla/mux"
+	"github.com/rs/cors"
 	"github.com/warent/proxycop/apiroutes"
 	"github.com/warent/proxycop/utility"
 )
@@ -17,7 +18,7 @@ import (
 var sessions map[int64]bool
 var sessionsWriteMutex sync.Mutex
 
-func writeSessionResult(session int64, result bool) {
+func safeWriteSessionResult(session int64, result bool) {
 	sessionsWriteMutex.Lock()
 	sessions[session] = result
 	sessionsWriteMutex.Unlock()
@@ -27,15 +28,19 @@ func filterSession(r *http.Request, ctx *goproxy.ProxyCtx) bool {
 	if val, ok := sessions[ctx.Session]; ok {
 		return val
 	}
-	sessions[ctx.Session] = isRequestForbidden(r, ctx)
+	safeWriteSessionResult(ctx.Session, isRequestForbidden(r, ctx))
 	return sessions[ctx.Session]
 }
 
 func isRequestForbidden(r *http.Request, ctx *goproxy.ProxyCtx) bool {
 
-	_, err := utility.FetchURLStatus(r.URL)
+	status, err := utility.FetchURLStatus(r.URL)
 
-	if err != nil {
+	if err != nil && err != utility.ErrNoStatus {
+		fmt.Println("Error: ", err)
+	}
+
+	if status != nil {
 		return true
 	}
 
@@ -45,6 +50,10 @@ func isRequestForbidden(r *http.Request, ctx *goproxy.ProxyCtx) bool {
 }
 
 func startProxy() {
+
+	c := cors.New(cors.Options{
+		AllowedOrigins: []string{"http://proxy.cop", "http://localhost:8081"},
+	})
 
 	sessions = map[int64]bool{}
 
@@ -57,7 +66,7 @@ func startProxy() {
 	proxy.OnRequest(filterForbidden()).HandleConnect(goproxy.AlwaysMitm)
 	proxy.OnRequest(filterForbidden()).DoFunc(func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 		w := httptest.NewRecorder()
-		http.Redirect(w, r, fmt.Sprintf("http://proxy.cop/status/url/%v", r.URL.Hostname()), http.StatusSeeOther)
+		http.Redirect(w, r, fmt.Sprintf("http://proxy.cop/url/%v/status", r.URL.Hostname()), http.StatusSeeOther)
 		return r, w.Result()
 	})
 
@@ -68,12 +77,12 @@ func startProxy() {
 		router := mux.NewRouter()
 
 		router.HandleFunc("/api/config", apiroutes.ConfigHandler)
+		router.HandleFunc("/api/url/{url}/status", apiroutes.URLStatusHandler)
 
 		if strings.HasPrefix(r.URL.Path, "/static") {
-			fs := http.FileServer(http.Dir("frontend/dist"))
-			fs.ServeHTTP(w, r)
+			http.FileServer(http.Dir("frontend/dist")).ServeHTTP(w, r)
 		} else if strings.HasPrefix(r.URL.Path, "/api") {
-			router.ServeHTTP(w, r)
+			c.ServeHTTP(w, r, router.ServeHTTP)
 		} else {
 			http.ServeFile(w, r, "frontend/dist/index.html")
 		}
