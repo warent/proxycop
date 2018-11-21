@@ -25,6 +25,11 @@ func safeWriteSessionResult(session int64, result bool) {
 }
 
 func filterSession(r *http.Request, ctx *goproxy.ProxyCtx) bool {
+
+	if r.URL.Hostname() == "proxy.cop" {
+		return false
+	}
+
 	if val, ok := sessions[ctx.Session]; ok {
 		return val
 	}

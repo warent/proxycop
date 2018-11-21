@@ -1,6 +1,7 @@
 package utility
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -19,7 +20,12 @@ type ProxyCopURLStatus struct {
 	Blacklisted bool
 
 	// Cooldown (TTL) in seconds
-	Cooldown int
+	Cooldown uint64
+}
+
+type ProxyCopURLConfig struct {
+	// Cooldown (TTL) in seconds
+	Cooldown uint64
 }
 
 func InitializeDB() error {
@@ -31,7 +37,7 @@ func InitializeDB() error {
 
 	db.Update(func(tx *buntdb.Tx) error {
 		tx.Set("config:blacklist", "www.reddit.com,reddit.com,www.facebook.com,facebook.com", nil)
-		tx.Set("config:cooldown:news.ycombinator.com", "1", nil)
+		tx.Set("url:news.ycombinator.com:config", `{"Cooldown": 1}`, nil)
 		return nil
 	})
 
@@ -42,30 +48,37 @@ func CloseDB() {
 	db.Close()
 }
 
+func GetURLConfig(url *url.URL) (*ProxyCopURLConfig, error) {
+
+	config := &ProxyCopURLConfig{}
+
+	err := db.View(func(tx *buntdb.Tx) error {
+		configString, err := tx.Get(fmt.Sprintf("url:%v:config", url.Hostname()))
+		if err != nil {
+			return err
+		}
+
+		return json.Unmarshal([]byte(configString), config)
+	})
+
+	if err != nil {
+		return config, err
+	}
+
+	return config, nil
+
+}
+
 func SetURLCooldown(url *url.URL) {
-	var cooldownMinutes uint64
 	var err error
 
-	err = db.View(func(tx *buntdb.Tx) error {
-		cooldownString, err := tx.Get(fmt.Sprintf("config:cooldown:%v", url.Hostname()))
-		if err != nil {
-			return err
-		}
-
-		cooldownMinutes, err = strconv.ParseUint(cooldownString, 10, 16)
-		if err != nil {
-			fmt.Printf("Invalid cooldown time [%v] for %v", cooldownString, url.Hostname())
-			return err
-		}
-
-		return nil
-	})
+	config, err := GetURLConfig(url)
 
 	if err == nil {
 		db.Update(func(tx *buntdb.Tx) error {
-			tx.Set(fmt.Sprintf("cooldown:%v", url.Hostname()), "true", &buntdb.SetOptions{
+			tx.Set(fmt.Sprintf("url:%v:cooldown", url.Hostname()), "true", &buntdb.SetOptions{
 				Expires: true,
-				TTL:     time.Duration(uint64(time.Minute) * cooldownMinutes),
+				TTL:     time.Duration(uint64(time.Minute) * config.Cooldown),
 			})
 			return nil
 		})
@@ -78,14 +91,14 @@ func FetchURLStatus(url *url.URL) (*ProxyCopURLStatus, error) {
 	// Check to see if the current page has been visited too recenly (i.e. is on cooldown)
 	err := db.View(func(tx *buntdb.Tx) error {
 		var err error
-		cooldownDuration, err = tx.TTL(fmt.Sprintf("cooldown:%v", url.Hostname()))
+		cooldownDuration, err = tx.TTL(fmt.Sprintf("url:%v:cooldown", url.Hostname()))
 		return err
 	})
 
 	// Cooldown exists
 	if err == nil {
 		return &ProxyCopURLStatus{
-			Cooldown: int(cooldownDuration / time.Second),
+			Cooldown: uint64(cooldownDuration / time.Second),
 		}, nil
 	}
 
@@ -107,4 +120,31 @@ func FetchURLStatus(url *url.URL) (*ProxyCopURLStatus, error) {
 	}
 
 	return nil, ErrNoStatus
+}
+
+func IncrementKey(key string) {
+	db.Update(func(tx *buntdb.Tx) error {
+
+		count := uint64(0)
+
+		domainCountStr, err := tx.Get(key)
+
+		if err != nil {
+			count, err = strconv.ParseUint(domainCountStr, 10, 64)
+			if err != nil {
+				fmt.Printf("Invalid domain count [%v] for %v", domainCountStr, key)
+				return err
+			}
+		}
+
+		count++
+
+		tx.Set(key, fmt.Sprintf("%v", count), nil)
+
+		return nil
+	})
+}
+
+func RecordURL(url *url.URL) {
+	IncrementKey(fmt.Sprintf("url:%v:stats:count", url.Hostname()))
 }
